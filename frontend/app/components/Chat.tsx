@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { 
   Send, Loader2, Sparkles, User, Bot, AlertCircle, 
@@ -31,6 +31,16 @@ interface User {
   role: string;
 }
 
+// ============================================
+// UNIQUE ID GENERATOR - FIXED
+// ============================================
+let messageIdCounter = 0;
+
+const generateUniqueId = (): string => {
+  messageIdCounter += 1;
+  return `${Date.now()}-${messageIdCounter}-${Math.random().toString(36).substr(2, 6)}`;
+};
+
 // Quick questions
 const QUICK_QUESTIONS = [
   { id: '1', label: '📚 Registration', question: 'How do I register for courses?' },
@@ -53,7 +63,7 @@ export default function Chat() {
   const [apiKey, setApiKey] = useState<string>('');
   const [messages, setMessages] = useState<Message[]>([
     {
-      id: '1',
+      id: generateUniqueId(),
       role: 'assistant',
       content: '✨ Welcome to the **Student Support Assistant**! I\'m here to help you with:\n\n• 📚 Course Registration\n• 📖 Library Services  \n• 📝 Exam Rules\n• 💰 Fee Payment\n• 🏠 Hostel Applications\n• 💻 ICT Support\n\n**How can I assist you today?** 🎓',
       timestamp: new Date(),
@@ -93,15 +103,18 @@ export default function Chat() {
     scrollToBottom();
   }, [messages]);
 
-  const addSystemMessage = (content: string) => {
+  // ============================================
+  // ADD SYSTEM MESSAGE - FIXED
+  // ============================================
+  const addSystemMessage = useCallback((content: string) => {
     const msg: Message = {
-      id: Date.now().toString(),
+      id: generateUniqueId(),
       role: 'system',
       content: content,
       timestamp: new Date(),
     };
     setMessages((prev) => [...prev, msg]);
-  };
+  }, []);
 
   const handleLogout = () => {
     localStorage.removeItem('apiKey');
@@ -198,12 +211,13 @@ export default function Chat() {
         }),
       });
       
+      const data = await response.json();
+      
       if (response.ok) {
         setRatings(prev => ({ ...prev, [messageId]: rating }));
         addSystemMessage(`⭐ You rated this answer as "${rating}"`);
       } else {
-        const error = await response.json();
-        addSystemMessage(`❌ Failed to save rating: ${error.detail || 'Unknown error'}`);
+        addSystemMessage(`❌ Failed to save rating: ${data.error || data.detail || 'Unknown error'}`);
       }
     } catch (err) {
       addSystemMessage('❌ Failed to save rating');
@@ -211,7 +225,7 @@ export default function Chat() {
   };
 
   // ============================================
-  // SEND MESSAGE - FIXED ERROR HANDLING
+  // SEND MESSAGE - FIXED
   // ============================================
   const sendMessage = async (question: string, fromDocument: boolean = false) => {
     if (!question.trim()) {
@@ -225,7 +239,7 @@ export default function Chat() {
     setAbortController(controller);
 
     const userMessage: Message = {
-      id: Date.now().toString(),
+      id: generateUniqueId(),
       role: 'user',
       content: question,
       timestamp: new Date(),
@@ -268,30 +282,20 @@ export default function Chat() {
         signal: controller.signal,
       });
 
-      // ============================================
-      // BETTER ERROR HANDLING
-      // ============================================
-      if (!res.ok) {
-        let errorMessage = `HTTP ${res.status}`;
-        try {
-          const errorData = await res.json();
-          if (errorData.error) {
-            errorMessage = errorData.error;
-          } else if (errorData.detail) {
-            errorMessage = errorData.detail;
-          } else {
-            errorMessage = JSON.stringify(errorData);
-          }
-        } catch (e) {
-          errorMessage = res.statusText || `HTTP ${res.status}`;
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        let errorMsg = data.error || data.detail || `HTTP ${res.status}`;
+        if (typeof errorMsg === 'object') {
+          errorMsg = JSON.stringify(errorMsg);
         }
-        throw new Error(errorMessage);
+        throw new Error(errorMsg);
       }
 
-      response = await res.json();
+      response = data;
 
       const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
+        id: generateUniqueId(),
         role: 'assistant',
         content: response.answer || 'I apologize, I couldn\'t generate a response.',
         timestamp: new Date(),
@@ -305,26 +309,15 @@ export default function Chat() {
         return;
       }
       
-      let errorMessage = 'Failed to get response.';
+      let errorMessage = err.message || 'Failed to get response.';
       
-      if (err instanceof Error) {
-        errorMessage = err.message;
-      } else if (typeof err === 'string') {
-        errorMessage = err;
-      } else if (err && typeof err === 'object') {
-        errorMessage = err.message || err.error || err.detail || JSON.stringify(err);
-      }
-      
-      // Clean up common error messages
       if (errorMessage.includes('connect') || errorMessage.includes('ECONNREFUSED')) {
         setIsBackendDown(true);
         errorMessage = 'Cannot connect to backend! Please ensure the backend is running.';
-      } else if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
+      } else if (errorMessage.includes('timeout')) {
         errorMessage = 'Request timed out. Please try again.';
-      } else if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
+      } else if (errorMessage.includes('401')) {
         errorMessage = 'Authentication required. Please login first.';
-      } else if (errorMessage.includes('422')) {
-        errorMessage = 'Invalid request. Please try again.';
       }
       
       addSystemMessage(`❌ ${errorMessage}`);
@@ -407,7 +400,7 @@ export default function Chat() {
         </div>
       </header>
 
-      {/* Messages - No error banner, errors show inline */}
+      {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4">
         <div className="max-w-4xl mx-auto space-y-4">
           {messages.map((message) => (

@@ -52,7 +52,7 @@ app.add_middleware(
 )
 
 # ============================================
-# MODELS - WITH DEFAULTS
+# MODELS
 # ============================================
 class QuestionRequest(BaseModel):
     question: str = Field(..., min_length=1, description="The question to ask")
@@ -350,22 +350,31 @@ def get_profile(api_key: str = Header(...)):
     }
 
 # ============================================
-# MAIN ASK ENDPOINTS - FIXED
+# MAIN ASK ENDPOINTS - FIXED FOR DIRECT JSON
 # ============================================
 
 @app.post("/ask")
-def ask_question(request: QuestionRequest):
+async def ask_question(request: Request):
     """
     Public endpoint - anyone can ask questions
-    Returns: { question, answer, model_used, timestamp }
+    Expects: { "question": "...", "model": "..." }
     """
-    logger.info(f"📝 Public question: {request.question[:100]}...")
-    logger.info(f"   Model: {request.model}")
-    
     try:
-        answer = ask_llm(request.question, model=request.model)
+        data = await request.json()
+        question = data.get('question', '')
+        model = data.get('model', 'uni-assistant')
         
-        # Check if ask_llm returned an error message
+        if not question:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Question is required", "timestamp": datetime.now().isoformat()}
+            )
+        
+        logger.info(f"📝 Public question: {question[:100]}...")
+        logger.info(f"   Model: {model}")
+        
+        answer = ask_llm(question, model=model)
+        
         if answer.startswith("Error:"):
             logger.warning(f"⚠️ LLM returned error: {answer}")
             return JSONResponse(
@@ -374,26 +383,17 @@ def ask_question(request: QuestionRequest):
             )
         
         return {
-            "question": request.question,
+            "question": question,
             "answer": answer,
-            "model_used": request.model,
+            "model_used": model,
             "timestamp": datetime.now().isoformat()
         }
         
-    except ConnectionError as e:
-        logger.error(f"❌ Connection error: {str(e)}")
+    except json.JSONDecodeError:
         return JSONResponse(
-            status_code=503,
-            content={"error": "Cannot connect to Ollama. Please run 'ollama serve'.", "timestamp": datetime.now().isoformat()}
+            status_code=400,
+            content={"error": "Invalid JSON format. Please send a valid JSON body.", "timestamp": datetime.now().isoformat()}
         )
-        
-    except TimeoutError as e:
-        logger.error(f"⏰ Timeout error: {str(e)}")
-        return JSONResponse(
-            status_code=504,
-            content={"error": "Request timed out. Please try again.", "timestamp": datetime.now().isoformat()}
-        )
-        
     except Exception as e:
         logger.error(f"❌ Error: {str(e)}")
         logger.error(traceback.format_exc())
@@ -403,13 +403,42 @@ def ask_question(request: QuestionRequest):
         )
 
 @app.post("/ask-protected")
-def ask_protected(request: QuestionRequest, user_info: Dict = verify_api_key):
-    """Protected endpoint - requires API key"""
-    logger.info(f"🔐 Protected question from {user_info['username']}: {request.question[:100]}...")
-    logger.info(f"   Model: {request.model}")
-    
+async def ask_protected(request: Request):
+    """
+    Protected endpoint - requires API key in header
+    """
     try:
-        answer = ask_llm(request.question, model=request.model)
+        # Get API key from header
+        api_key = request.headers.get('api_key')
+        if not api_key:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "API key is required in the header", "timestamp": datetime.now().isoformat()}
+            )
+        
+        # Validate API key
+        user_info = validate_api_key(api_key)
+        if not user_info:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Invalid API key", "timestamp": datetime.now().isoformat()}
+            )
+        
+        # Parse request body
+        data = await request.json()
+        question = data.get('question', '')
+        model = data.get('model', 'uni-assistant')
+        
+        if not question:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Question is required", "timestamp": datetime.now().isoformat()}
+            )
+        
+        logger.info(f"🔐 Protected question from {user_info['username']}: {question[:100]}...")
+        logger.info(f"   Model: {model}")
+        
+        answer = ask_llm(question, model=model)
         
         if answer.startswith("Error:"):
             logger.warning(f"⚠️ LLM returned error: {answer}")
@@ -419,27 +448,18 @@ def ask_protected(request: QuestionRequest, user_info: Dict = verify_api_key):
             )
         
         return {
-            "question": request.question,
+            "question": question,
             "answer": answer,
             "user": user_info["username"],
-            "model_used": request.model,
+            "model_used": model,
             "timestamp": datetime.now().isoformat()
         }
         
-    except ConnectionError as e:
-        logger.error(f"❌ Connection error: {str(e)}")
+    except json.JSONDecodeError:
         return JSONResponse(
-            status_code=503,
-            content={"error": "Cannot connect to Ollama. Please run 'ollama serve'.", "timestamp": datetime.now().isoformat()}
+            status_code=400,
+            content={"error": "Invalid JSON format", "timestamp": datetime.now().isoformat()}
         )
-        
-    except TimeoutError as e:
-        logger.error(f"⏰ Timeout error: {str(e)}")
-        return JSONResponse(
-            status_code=504,
-            content={"error": "Request timed out. Please try again.", "timestamp": datetime.now().isoformat()}
-        )
-        
     except Exception as e:
         logger.error(f"❌ Error: {str(e)}")
         logger.error(traceback.format_exc())
@@ -448,17 +468,22 @@ def ask_protected(request: QuestionRequest, user_info: Dict = verify_api_key):
             content={"error": f"An error occurred: {str(e)}", "timestamp": datetime.now().isoformat()}
         )
 
-# ============================================
-# BONUS B: RAG Endpoint
-# ============================================
 @app.post("/ask-rag")
-def ask_with_rag(request: QuestionRequest):
+async def ask_with_rag(request: Request):
     """RAG endpoint - retrieves from FAQ before generating answer"""
-    logger.info(f"📝 RAG Question: {request.question[:100]}...")
-    logger.info(f"   Model: {request.model}")
-    
     try:
-        answer = rag.ask_with_rag(request.question)
+        data = await request.json()
+        question = data.get('question', '')
+        
+        if not question:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Question is required", "timestamp": datetime.now().isoformat()}
+            )
+        
+        logger.info(f"📝 RAG Question: {question[:100]}...")
+        
+        answer = rag.ask_with_rag(question)
         
         if answer.startswith("Error:"):
             logger.warning(f"⚠️ LLM returned error: {answer}")
@@ -468,13 +493,17 @@ def ask_with_rag(request: QuestionRequest):
             )
         
         return {
-            "question": request.question,
+            "question": question,
             "answer": answer,
             "method": "RAG",
-            "model_used": request.model,
             "timestamp": datetime.now().isoformat()
         }
         
+    except json.JSONDecodeError:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid JSON format", "timestamp": datetime.now().isoformat()}
+        )
     except Exception as e:
         logger.error(f"❌ RAG Error: {str(e)}")
         logger.error(traceback.format_exc())
@@ -483,8 +512,52 @@ def ask_with_rag(request: QuestionRequest):
             content={"error": f"RAG error: {str(e)}", "timestamp": datetime.now().isoformat()}
         )
 
+@app.post("/ask-from-document")
+async def ask_from_document(request: Request):
+    """Ask a question using uploaded documents"""
+    try:
+        data = await request.json()
+        question = data.get('question', '')
+        
+        if not question:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Question is required", "timestamp": datetime.now().isoformat()}
+            )
+        
+        logger.info(f"📝 Document question: {question[:100]}...")
+        
+        answer = doc_qa.ask_from_document(question)
+        
+        if answer.startswith("Error:"):
+            logger.warning(f"⚠️ LLM returned error: {answer}")
+            return JSONResponse(
+                status_code=503,
+                content={"error": answer, "timestamp": datetime.now().isoformat()}
+            )
+        
+        return {
+            "question": question,
+            "answer": answer,
+            "source": "document",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except json.JSONDecodeError:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid JSON format", "timestamp": datetime.now().isoformat()}
+        )
+    except Exception as e:
+        logger.error(f"❌ Document QA Error: {str(e)}")
+        logger.error(traceback.format_exc())
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Document QA error: {str(e)}", "timestamp": datetime.now().isoformat()}
+        )
+
 # ============================================
-# BONUS A: Document Endpoints
+# BONUS A: Document Upload
 # ============================================
 @app.post("/upload-document")
 async def upload_document(file: UploadFile = File(...)):
@@ -503,37 +576,6 @@ async def upload_document(file: UploadFile = File(...)):
         return JSONResponse(
             status_code=500,
             content={"error": f"Upload failed: {str(e)}", "timestamp": datetime.now().isoformat()}
-        )
-
-@app.post("/ask-from-document")
-def ask_from_document(request: QuestionRequest):
-    logger.info(f"📝 Document question: {request.question[:100]}...")
-    logger.info(f"   Model: {request.model}")
-    
-    try:
-        answer = doc_qa.ask_from_document(request.question)
-        
-        if answer.startswith("Error:"):
-            logger.warning(f"⚠️ LLM returned error: {answer}")
-            return JSONResponse(
-                status_code=503,
-                content={"error": answer, "timestamp": datetime.now().isoformat()}
-            )
-        
-        return {
-            "question": request.question,
-            "answer": answer,
-            "source": "document",
-            "model_used": request.model,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Document QA Error: {str(e)}")
-        logger.error(traceback.format_exc())
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"Document QA error: {str(e)}", "timestamp": datetime.now().isoformat()}
         )
 
 # ============================================
@@ -563,6 +605,11 @@ async def rate_answer(request: Request):
             "timestamp": datetime.now().isoformat()
         }
         
+    except json.JSONDecodeError:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid JSON format", "timestamp": datetime.now().isoformat()}
+        )
     except Exception as e:
         logger.error(f"❌ Rating error: {str(e)}")
         return JSONResponse(
