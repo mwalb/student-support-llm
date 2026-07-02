@@ -1,5 +1,9 @@
 import requests
 import json
+import logging
+
+# Setup logger
+logger = logging.getLogger(__name__)
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 
@@ -24,6 +28,9 @@ def ask_llm(question, model="uni-assistant"):
         }
     }
     
+    # Log the request
+    logger.info(f"📤 Ollama request - Model: {model}")
+    
     try:
         response = requests.post(
             OLLAMA_URL,
@@ -32,10 +39,22 @@ def ask_llm(question, model="uni-assistant"):
         )
         response.raise_for_status()
         data = response.json()
-        return data.get("response", "No response generated.")
-    except requests.exceptions.ConnectionError:
-        return "Error: Cannot connect to Ollama. Please run 'ollama serve' in another terminal."
-    except requests.exceptions.Timeout:
-        return "Error: Request timed out. Please try again."
+        answer = data.get("response", "No response generated.")
+        
+        logger.info(f"📥 Ollama response - Length: {len(answer)} chars")
+        return answer
+        
+    except requests.exceptions.ConnectionError as e:
+        error_msg = "❌ Error: Cannot connect to Ollama. Please run 'ollama serve'."
+        logger.error(f"ConnectionError: {str(e)}")
+        return error_msg
+        
+    except requests.exceptions.Timeout as e:
+        error_msg = "❌ Error: Request timed out. Please try again."
+        logger.error(f"Timeout: {str(e)}")
+        return error_msg
+        
     except requests.exceptions.RequestException as e:
-        return f"Error: {str(e)}"
+        error_msg = f"❌ Error: {str(e)}"
+        logger.error(f"RequestException: {str(e)}")
+        return error_msg

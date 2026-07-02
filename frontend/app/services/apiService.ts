@@ -1,41 +1,48 @@
-import { QuestionRequest, AnswerResponse, HealthResponse } from '@/types';
-
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-export class ApiService {
-  private baseUrl: string;
-
-  constructor(baseUrl: string = API_BASE_URL) {
-    this.baseUrl = baseUrl;
-  }
-
-  async healthCheck(): Promise<HealthResponse> {
-    const response = await fetch(`${this.baseUrl}/health`);
+export const apiService = {
+  // Public ask (no auth required)
+  askQuestion: async ({ question, model }: { question: string; model: string }) => {
+    const response = await fetch(`${API_BASE_URL}/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, model }),
+    });
     if (!response.ok) {
-      throw new Error(`Health check failed: ${response.statusText}`);
+      const error = await response.json();
+      throw new Error(error.error || 'API Error');
     }
     return response.json();
-  }
+  },
 
-  async askQuestion(request: QuestionRequest): Promise<AnswerResponse> {
-    const response = await fetch(`${this.baseUrl}/ask`, {
+  // Protected ask (requires API key)
+  askProtected: async ({ question, model, apiKey }: { question: string; model: string; apiKey: string }) => {
+    const response = await fetch(`${API_BASE_URL}/ask-protected`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'api_key': apiKey,
       },
-      body: JSON.stringify({
-        question: request.question,
-        model: request.model || 'uni-assistant',
-      }),
+      body: JSON.stringify({ question, model }),
     });
-
     if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`API Error: ${response.status} - ${error}`);
+      const error = await response.json();
+      throw new Error(error.error || 'API Error');
     }
-
     return response.json();
-  }
-}
+  },
 
-export const apiService = new ApiService();
+  // RAG ask
+  askRAG: async ({ question, model }: { question: string; model: string }) => {
+    const response = await fetch(`${API_BASE_URL}/ask-rag`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, model }),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'API Error');
+    }
+    return response.json();
+  },
+};

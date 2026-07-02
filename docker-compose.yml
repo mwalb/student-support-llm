@@ -1,0 +1,30 @@
+# docker-compose.yml for Student Support Assistant
+# Bonus C: Containerize the backend
+
+version: '3.8'
+
+services:
+  backend:
+    build: .
+    container_name: student-assistant-backend
+    ports:
+      - "8000:8000"
+      - "11434:11434"
+    volumes:
+      - ./backend:/app
+      - ./backend/logs:/app/logs
+      - ./backend/documents:/app/documents
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_ORIGINS=*
+    restart: unless-stopped
+    networks:
+      - student-network
+
+volumes:
+  ollama_data:
+
+networks:
+  student-network:
+    driver: bridge
